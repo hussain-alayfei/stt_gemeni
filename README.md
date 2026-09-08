@@ -1,91 +1,76 @@
-# Arabic STT Benchmark Lab with Gemini
+# Gemini Speech to Text
 
-A small Streamlit project for testing speech-to-text quality with Google's Gemini transcription model.
+A minimal web app for fast speech-to-text transcription using Google's dedicated **Gemini 3.5 Transcribe** model.
 
 ## What it does
 
-- Upload an audio file (`WAV`, `MP3`, `M4A`, `OGG`, `FLAC`, `WEBM`)
-- Transcribe speech using `gemini-3.5-transcribe`
-- Optionally paste a ground-truth transcript
-- Measure **WER (Word Error Rate)** and **CER (Character Error Rate)**
-- Download the generated transcript
+- Upload audio with drag & drop
+- Works directly with Gemini-supported formats including MP3, WAV, M4A, OGG, FLAC, AAC, OPUS, WEBM, AIFF and more
+- Automatically converts unsupported formats to a compact MP3 in the browser using FFmpeg.wasm
+- Automatically compresses oversized uploads before sending them to the Vercel API route
+- Auto-detects Arabic, English and mixed/code-switched speech
+- Uses verbatim transcription to preserve spoken wording and dialect
+- Copy or download the transcript
+- Keeps the Gemini API key server-side
 
-## Why this project?
+## Stack
 
-Speech-to-text should be evaluated, not only listened to. This app lets you compare Gemini's transcript against a known reference and quantify the errors.
+- Next.js 16
+- React 19
+- TypeScript
+- `@google/genai`
+- `gemini-3.5-transcribe`
+- FFmpeg.wasm for browser-side audio conversion
+- Vercel
 
-Example:
-
-- Ground truth: `السلام عليكم كيف حالك`
-- Prediction: `السلام عليكم كيف حالكم`
-- The app calculates WER/CER automatically.
-
-## Setup
-
-### 1. Clone
+## Run locally
 
 ```bash
 git clone https://github.com/hussain-alayfei/stt_gemeni.git
 cd stt_gemeni
+npm install
 ```
 
-### 2. Create a virtual environment
-
-```bash
-python -m venv .venv
-```
-
-Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Add your Gemini API key
-
-Create a `.env` file:
+Create `.env.local`:
 
 ```env
-GEMINI_API_KEY=your_key_here
+GEMINI_API_KEY=your_google_ai_studio_key_here
 ```
 
-Never commit your real API key.
-
-### 5. Run
+Then run:
 
 ```bash
-streamlit run app.py
+npm run dev
 ```
 
-## Suggested next experiments
+Open `http://localhost:3000`.
 
-1. Collect 20-50 short Saudi Arabic clips.
-2. Create a human-verified reference transcript for each clip.
-3. Measure WER/CER per clip.
-4. Group mistakes into names, dialect words, numbers, and English code-switching.
-5. Add custom vocabulary and compare before/after accuracy.
-6. Compare multiple STT models using the exact same benchmark.
+## Deploy to Vercel
 
-## Stack
+1. Import this GitHub repository into Vercel.
+2. Go to **Project Settings → Environment Variables**.
+3. Add:
 
-- Python
-- Streamlit
-- Google Gen AI SDK
-- Gemini 3.5 Transcribe
-- jiwer
+```text
+GEMINI_API_KEY = your_google_ai_studio_key
+```
 
-## Goal
+4. Redeploy.
 
-Turn this repository into a reproducible benchmark for Arabic and Saudi-dialect speech-to-text systems.
+The API key is only read inside `app/api/transcribe/route.ts`; it is never exposed to the browser.
+
+## Audio handling
+
+Gemini 3.5 Transcribe natively supports common speech formats, so supported files are sent without conversion for the lowest latency. If the file format is not supported, the browser converts it to mono 16 kHz MP3 before upload.
+
+Because Vercel Functions have a request payload limit, large files are also compressed in the browser. Extremely long recordings that remain above the request limit after compression will currently show a clear size error instead of failing silently.
+
+## Model
+
+This project uses:
+
+```text
+gemini-3.5-transcribe
+```
+
+The model automatically identifies the spoken language and supports multilingual/code-switched audio. The app intentionally uses **verbatim** mode to preserve fillers, repetitions and dialect wording as closely as possible.
