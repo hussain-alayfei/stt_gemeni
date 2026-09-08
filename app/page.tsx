@@ -215,114 +215,126 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  const completedCount = items.filter((item) => item.stage === "done").length;
+  const completedItems = items.filter((item) => item.transcript);
+  const completedCount = completedItems.length;
 
   return (
     <main className="shell">
       <section className="hero">
-        <div className="eyebrow">GEMINI SPEECH TO TEXT</div>
-        <h1>Speech in. Text out.</h1>
-        <p>Upload multiple recordings and transcribe Arabic, English, or mixed speech in parallel.</p>
+        <div className="eyebrow">GEMINI STT</div>
+        <h1>Audio to text.</h1>
+        <p>Upload. Transcribe. Done.</p>
       </section>
 
-      <section className="card">
-        <input
-          ref={inputRef}
-          className="hiddenInput"
-          type="file"
-          multiple
-          accept="audio/*,.amr,.3gp,.wma,.caf,.ape,.ac3,.mka"
-          onChange={(event) => {
-            if (event.target.files) addFiles(event.target.files);
-            event.target.value = "";
-          }}
-        />
+      <section className="workspace">
+        <div className="leftPane">
+          <section className="card">
+            <input
+              ref={inputRef}
+              className="hiddenInput"
+              type="file"
+              multiple
+              accept="audio/*,.amr,.3gp,.wma,.caf,.ape,.ac3,.mka"
+              onChange={(event) => {
+                if (event.target.files) addFiles(event.target.files);
+                event.target.value = "";
+              }}
+            />
 
-        <button
-          type="button"
-          className={`dropzone ${dragging ? "dragging" : ""}`}
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(event) => {
-            event.preventDefault();
-            setDragging(false);
-            addFiles(event.dataTransfer.files);
-          }}
-        >
-          <span className="uploadIcon">↑</span>
-          <strong>{items.length ? `${items.length} audio file${items.length === 1 ? "" : "s"} selected` : "Upload audio files"}</strong>
-          <span className="dropHint">Drop multiple files here, or click to browse</span>
-          <span className="formats">MP3 · WAV · M4A · OGG · FLAC · WEBM · AAC · OPUS · more</span>
-        </button>
+            <button
+              type="button"
+              className={`dropzone ${dragging ? "dragging" : ""}`}
+              onClick={() => inputRef.current?.click()}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                addFiles(event.dataTransfer.files);
+              }}
+            >
+              <span className="uploadIcon">↑</span>
+              <strong>{items.length ? `${items.length} file${items.length === 1 ? "" : "s"}` : "Add audio"}</strong>
+              <span className="dropHint">Drop files or browse</span>
+              <span className="formats">MP3 · WAV · M4A · OGG · FLAC · WEBM · more</span>
+            </button>
 
-        {items.length > 0 && (
-          <div className="queueList">
-            {items.map((item) => (
-              <div className="queueItem" key={item.id}>
-                <div className="queueMain">
-                  <strong>{item.file.name}</strong>
-                  <span>{humanSize(item.file.size)}</span>
-                </div>
+            {items.length > 0 && (
+              <div className="queueList">
+                {items.map((item) => (
+                  <div className="queueItem" key={item.id}>
+                    <div className="queueMain">
+                      <strong>{item.file.name}</strong>
+                      <span>{humanSize(item.file.size)}</span>
+                    </div>
 
-                <div className="queueStatus">
-                  {item.stage === "idle" && <span>Ready</span>}
-                  {item.stage === "converting" && <span>Converting {item.progress}%</span>}
-                  {item.stage === "uploading" && <span className="pulseText">Transcribing…</span>}
-                  {item.stage === "done" && <span className="successText">Done</span>}
-                  {item.stage === "error" && <span className="errorText">Failed</span>}
-                  {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)}>×</button>}
-                </div>
+                    <div className="queueStatus">
+                      {item.stage === "idle" && <span>Ready</span>}
+                      {item.stage === "converting" && <span>{item.progress}%</span>}
+                      {item.stage === "uploading" && <span className="pulseText">Working…</span>}
+                      {item.stage === "done" && <span className="successText">Done</span>}
+                      {item.stage === "error" && <span className="errorText">Failed</span>}
+                      {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)}>×</button>}
+                    </div>
 
-                {item.stage === "converting" && (
-                  <div className="progressTrack queueProgress">
-                    <div className="progressBar" style={{ width: `${item.progress}%` }} />
+                    {item.stage === "converting" && (
+                      <div className="progressTrack queueProgress">
+                        <div className="progressBar" style={{ width: `${item.progress}%` }} />
+                      </div>
+                    )}
+
+                    {item.error && <div className="queueError">{item.error}</div>}
                   </div>
-                )}
-
-                {item.error && <div className="queueError">{item.error}</div>}
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        <button className="primaryButton" type="button" disabled={!items.length || processing} onClick={transcribeAll}>
-          {processing ? `Processing ${items.length} files…` : `Transcribe ${items.length || ""}${items.length === 1 ? " file" : items.length > 1 ? " files" : ""}`}
-        </button>
+            <button className="primaryButton" type="button" disabled={!items.length || processing} onClick={transcribeAll}>
+              {processing ? "Transcribing…" : items.length ? `Transcribe ${items.length}` : "Transcribe"}
+            </button>
+          </section>
+        </div>
+
+        <div className="rightPane">
+          <section className="resultsPanel">
+            <div className="batchHeader">
+              <div>
+                <span className="resultLabel">RESULTS</span>
+                <h2>{completedCount ? `${completedCount} of ${items.length}` : "Transcripts"}</h2>
+              </div>
+              {completedCount > 0 && (
+                <button type="button" className="downloadAllButton" onClick={downloadAll}>Download all</button>
+              )}
+            </div>
+
+            {!completedCount && (
+              <div className="emptyState">
+                <span>Transcripts will appear here.</span>
+              </div>
+            )}
+
+            <div className="resultsList">
+              {completedItems.map((item) => (
+                <section className="resultCard" key={`result-${item.id}`}>
+                  <div className="resultHeader">
+                    <h2>{item.file.name}</h2>
+                    <div className="actions">
+                      <button type="button" onClick={() => copyTranscript(item)}>{item.copied ? "Copied" : "Copy"}</button>
+                      <button type="button" onClick={() => downloadTranscript(item)}>Download</button>
+                    </div>
+                  </div>
+                  <div className="transcript" dir="auto">{item.transcript}</div>
+                </section>
+              ))}
+            </div>
+          </section>
+        </div>
       </section>
 
-      {completedCount > 0 && (
-        <section className="batchHeader">
-          <div>
-            <span className="resultLabel">RESULTS</span>
-            <h2>{completedCount} of {items.length} complete</h2>
-          </div>
-          <button type="button" className="downloadAllButton" onClick={downloadAll}>Download all</button>
-        </section>
-      )}
-
-      {items.filter((item) => item.transcript).map((item) => (
-        <section className="resultCard" key={`result-${item.id}`}>
-          <div className="resultHeader">
-            <div>
-              <span className="resultLabel">TRANSCRIPT</span>
-              <h2>{item.file.name}</h2>
-            </div>
-            <div className="actions">
-              <button type="button" onClick={() => copyTranscript(item)}>{item.copied ? "Copied" : "Copy"}</button>
-              <button type="button" onClick={() => downloadTranscript(item)}>Download</button>
-            </div>
-          </div>
-          <div className="transcript" dir="auto">{item.transcript}</div>
-        </section>
-      ))}
-
-      <footer>
-        Up to <strong>{MAX_CONCURRENT} recordings process in parallel</strong> · Powered by Gemini 3.5 Transcribe.
-      </footer>
+      <footer>3 files at a time · Gemini 3.5 Transcribe</footer>
     </main>
   );
 }
