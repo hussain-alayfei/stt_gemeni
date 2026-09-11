@@ -10,7 +10,7 @@ export async function GET() {
 
   if (!apiKey) {
     return Response.json(
-      { ok: false, status: "missing_key", latencyMs: Date.now() - started },
+      { ok: false, status: "configuration_error", latencyMs: Date.now() - started },
       { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }
@@ -32,8 +32,7 @@ export async function GET() {
       return Response.json(
         {
           ok: false,
-          status: "gemini_unavailable",
-          upstreamStatus: response.status,
+          status: "upstream_unavailable",
           latencyMs,
         },
         { status: 503, headers: { "Cache-Control": "no-store" } },
@@ -41,7 +40,7 @@ export async function GET() {
     }
 
     return Response.json(
-      { ok: true, status: "connected", model: MODEL, latencyMs },
+      { ok: true, status: "connected", latencyMs },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
