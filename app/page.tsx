@@ -55,6 +55,16 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.style.colorScheme = resolved;
 }
 
+function WaveLoader({ small = false }: { small?: boolean }) {
+  return (
+    <span className={`waveLoader${small ? " small" : ""}`} aria-hidden="true">
+      {Array.from({ length: 5 }).map((_, index) => (
+        <span key={index} style={{ animationDelay: `${index * 90}ms` }} />
+      ))}
+    </span>
+  );
+}
+
 async function convertToMp3(file: File, onProgress: (value: number) => void) {
   const [{ FFmpeg }, { fetchFile, toBlobURL }] = await Promise.all([
     import("@ffmpeg/ffmpeg"),
@@ -278,17 +288,17 @@ export default function Home() {
   const completedItems = items.filter((item) => item.transcript);
   const completedCount = completedItems.length;
   const healthLabel = health.state === "connected"
-    ? `Gemini connected${health.latencyMs ? ` · ${health.latencyMs} ms` : ""}`
+    ? `API connected${health.latencyMs ? ` · ${health.latencyMs} ms` : ""}`
     : health.state === "checking"
-      ? "Checking Gemini"
-      : "Gemini unavailable";
+      ? "Checking API"
+      : "API unavailable";
 
   return (
     <main className="shell">
       <header className="topbar">
         <div className="brandArea">
-          <div className="brand">Gemini STT</div>
-          <div className={`healthStatus ${health.state}`} title="Backend and Gemini API connection">
+          <div className="brand">Speech to Text</div>
+          <div className={`healthStatus ${health.state}`} title="Backend API connection">
             <span className="statusDot" />
             <span>{healthLabel}</span>
           </div>
@@ -353,7 +363,7 @@ export default function Home() {
             {items.length > 0 && (
               <div className="queueList">
                 {items.map((item) => (
-                  <div className="queueItem" key={item.id}>
+                  <div className="queueItem fadeItem" key={item.id}>
                     <div className="queueMain">
                       <strong>{item.file.name}</strong>
                       <span>{humanSize(item.file.size)}</span>
@@ -362,7 +372,9 @@ export default function Home() {
                     <div className="queueStatus">
                       {item.stage === "idle" && <span>Ready</span>}
                       {item.stage === "converting" && <span>{item.progress}%</span>}
-                      {item.stage === "uploading" && <span className="pulseText">Working…</span>}
+                      {item.stage === "uploading" && (
+                        <span className="workingStatus"><WaveLoader small /><span>Working</span></span>
+                      )}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
                       {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.file.name}`}>×</button>}
@@ -381,7 +393,9 @@ export default function Home() {
             )}
 
             <button className="primaryButton" type="button" disabled={!items.length || processing} onClick={transcribeAll}>
-              {processing ? "Transcribing…" : items.length ? `Transcribe ${items.length}` : "Transcribe"}
+              {processing ? (
+                <span className="buttonProcessing"><WaveLoader /><span>Transcribing</span></span>
+              ) : items.length ? `Transcribe ${items.length}` : "Transcribe"}
             </button>
           </section>
         </div>
@@ -399,12 +413,16 @@ export default function Home() {
             </div>
 
             {!completedCount && (
-              <div className="emptyState">Transcripts appear here.</div>
+              <div className="emptyState">
+                {processing ? (
+                  <div className="emptyProcessing"><WaveLoader /><span>Processing audio</span></div>
+                ) : "Transcripts appear here."}
+              </div>
             )}
 
             <div className="resultsList">
               {completedItems.map((item) => (
-                <section className="resultCard" key={`result-${item.id}`}>
+                <section className="resultCard fadeItem" key={`result-${item.id}`}>
                   <div className="resultHeader">
                     <h2>{item.file.name}</h2>
                     <div className="actions">
@@ -420,7 +438,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>Gemini 3.5 Transcribe · 3 files at a time</footer>
+      <footer>3 files at a time</footer>
     </main>
   );
 }
