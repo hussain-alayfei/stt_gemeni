@@ -10,6 +10,7 @@ const DIRECT_EXTENSIONS = new Set([
 const MAX_SERVER_BYTES = 4 * 1024 * 1024;
 const MAX_CONCURRENT = 3;
 const THEME_KEY = "stt-theme";
+const USAGE_KEY = "stt-usage-v1";
 
 type Stage = "idle" | "converting" | "uploading" | "done" | "error";
 type ThemeMode = "light" | "dark" | "system";
@@ -28,6 +29,25 @@ type AudioItem = {
 type HealthInfo = {
   state: HealthState;
   latencyMs?: number;
+};
+
+type UsagePayload = {
+  inputTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+type UsageEntry = {
+  id: string;
+  createdAt: string;
+  fileName: string;
+  inputTokens: number;
+  outputTokens: number;
+  thoughtTokens: number;
+  totalTokens: number;
+  costUsd: number;
 };
 
 function extensionOf(name: string) {
@@ -55,14 +75,39 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.style.colorScheme = resolved;
 }
 
-function WaveLoader({ small = false }: { small?: boolean }) {
+function WaveLoader() {
   return (
-    <span className={`waveLoader${small ? " small" : ""}`} aria-hidden="true">
+    <span className="waveLoader" aria-hidden="true">
       {Array.from({ length: 5 }).map((_, index) => (
         <span key={index} style={{ animationDelay: `${index * 90}ms` }} />
       ))}
     </span>
   );
+}
+
+function recordUsage(fileName: string, usage?: UsagePayload) {
+  if (!usage) return;
+
+  const entry: UsageEntry = {
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    fileName,
+    inputTokens: Number(usage.inputTokens) || 0,
+    outputTokens: Number(usage.outputTokens) || 0,
+    thoughtTokens: Number(usage.thoughtTokens) || 0,
+    totalTokens: Number(usage.totalTokens) || 0,
+    costUsd: Number(usage.costUsd) || 0,
+  };
+
+  try {
+    const stored = localStorage.getItem(USAGE_KEY);
+    const current = stored ? JSON.parse(stored) : [];
+    const entries = Array.isArray(current) ? current : [];
+    localStorage.setItem(USAGE_KEY, JSON.stringify([...entries, entry].slice(-1000)));
+    window.dispatchEvent(new Event("stt-usage-updated"));
+  } catch {
+    // Usage tracking must never block transcription.
+  }
 }
 
 async function convertToMp3(file: File, onProgress: (value: number) => void) {
@@ -218,6 +263,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Transcription failed.");
 
+      recordUsage(file.name, data.usage);
       updateItem(id, {
         transcript: data.transcript || "",
         stage: "done",
@@ -304,18 +350,24 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="themeSwitch" role="group" aria-label="Color theme">
-          {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
-            <button
-              key={mode}
-              type="button"
-              className={theme === mode ? "active" : ""}
-              aria-pressed={theme === mode}
-              onClick={() => setTheme(mode)}
-            >
-              {mode[0].toUpperCase() + mode.slice(1)}
-            </button>
-          ))}
+        <div className="topbarActions">
+          <nav className="pageNav" aria-label="Pages">
+            <a className="navLink active" href="/">Transcribe</a>
+            <a className="navLink" href="/usage">Usage</a>
+          </nav>
+          <div className="themeSwitch" role="group" aria-label="Color theme">
+            {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={theme === mode ? "active" : ""}
+                aria-pressed={theme === mode}
+                onClick={() => setTheme(mode)}
+              >
+                {mode[0].toUpperCase() + mode.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -372,9 +424,7 @@ export default function Home() {
                     <div className="queueStatus">
                       {item.stage === "idle" && <span>Ready</span>}
                       {item.stage === "converting" && <span>{item.progress}%</span>}
-                      {item.stage === "uploading" && (
-                        <span className="workingStatus"><WaveLoader small /><span>Working</span></span>
-                      )}
+                      {item.stage === "uploading" && <span>Working</span>}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
                       {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.file.name}`}>×</button>}
@@ -393,9 +443,7 @@ export default function Home() {
             )}
 
             <button className="primaryButton" type="button" disabled={!items.length || processing} onClick={transcribeAll}>
-              {processing ? (
-                <span className="buttonProcessing"><WaveLoader /><span>Transcribing</span></span>
-              ) : items.length ? `Transcribe ${items.length}` : "Transcribe"}
+              {processing ? "Transcribing" : items.length ? `Transcribe ${items.length}` : "Transcribe"}
             </button>
           </section>
         </div>
