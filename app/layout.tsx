@@ -10,8 +10,8 @@ const plex = IBM_Plex_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Gemini Speech to Text",
-  description: "Fast Arabic and English speech-to-text powered by Gemini.",
+  title: "Speech to Text",
+  description: "Fast Arabic and English speech-to-text.",
 };
 
 const themeScript = `
