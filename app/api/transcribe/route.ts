@@ -8,6 +8,8 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MAX_BYTES = 4 * 1024 * 1024;
+const INPUT_USD_PER_MILLION_TOKENS = 2;
+const OUTPUT_USD_PER_MILLION_TOKENS = 12;
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   wav: "audio/wav",
@@ -149,7 +151,25 @@ export async function POST(request: Request) {
       throw new Error("Transcription returned an empty result.");
     }
 
-    return Response.json({ transcript });
+    const inputTokens = interaction.usage?.total_input_tokens ?? 0;
+    const outputTokens = interaction.usage?.total_output_tokens ?? 0;
+    const thoughtTokens = interaction.usage?.total_thought_tokens ?? 0;
+    const totalTokens = interaction.usage?.total_tokens ?? inputTokens + outputTokens + thoughtTokens;
+    const costUsd =
+      (inputTokens * INPUT_USD_PER_MILLION_TOKENS +
+        (outputTokens + thoughtTokens) * OUTPUT_USD_PER_MILLION_TOKENS) /
+      1_000_000;
+
+    return Response.json({
+      transcript,
+      usage: {
+        inputTokens,
+        outputTokens,
+        thoughtTokens,
+        totalTokens,
+        costUsd: Number(costUsd.toFixed(8)),
+      },
+    });
   } catch (error) {
     console.error("Transcription error:", error);
     const message = error instanceof Error ? error.message : "Transcription failed.";
