@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const DIRECT_EXTENSIONS = new Set([
   "wav", "mp3", "aiff", "aif", "aac", "ogg", "flac", "mpeg",
@@ -9,8 +9,11 @@ const DIRECT_EXTENSIONS = new Set([
 
 const MAX_SERVER_BYTES = 4 * 1024 * 1024;
 const MAX_CONCURRENT = 3;
+const THEME_KEY = "stt-theme";
 
 type Stage = "idle" | "converting" | "uploading" | "done" | "error";
+type ThemeMode = "light" | "dark" | "system";
+type HealthState = "checking" | "connected" | "error";
 
 type AudioItem = {
   id: string;
@@ -20,6 +23,11 @@ type AudioItem = {
   transcript: string;
   error: string;
   copied: boolean;
+};
+
+type HealthInfo = {
+  state: HealthState;
+  latencyMs?: number;
 };
 
 function extensionOf(name: string) {
@@ -38,6 +46,13 @@ function itemId(file: File) {
 
 function needsConversion(file: File) {
   return !DIRECT_EXTENSIONS.has(extensionOf(file.name)) || file.size > MAX_SERVER_BYTES;
+}
+
+function applyTheme(mode: ThemeMode) {
+  const media = window.matchMedia("(prefers-color-scheme: dark)");
+  const resolved = mode === "system" ? (media.matches ? "dark" : "light") : mode;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
 }
 
 async function convertToMp3(file: File, onProgress: (value: number) => void) {
@@ -92,6 +107,51 @@ export default function Home() {
   const [items, setItems] = useState<AudioItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>("system");
+  const [health, setHealth] = useState<HealthInfo>({ state: "checking" });
+
+  useEffect(() => {
+    const saved = localStorage.getItem(THEME_KEY);
+    const initial: ThemeMode = saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
+    setTheme(initial);
+    applyTheme(initial);
+  }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+    localStorage.setItem(THEME_KEY, theme);
+
+    if (theme !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => applyTheme("system");
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [theme]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function checkHealth() {
+      try {
+        const response = await fetch("/api/health", { cache: "no-store" });
+        const data = await response.json();
+        if (!active) return;
+        setHealth({
+          state: response.ok && data.ok ? "connected" : "error",
+          latencyMs: typeof data.latencyMs === "number" ? data.latencyMs : undefined,
+        });
+      } catch {
+        if (active) setHealth({ state: "error" });
+      }
+    }
+
+    checkHealth();
+    const timer = window.setInterval(checkHealth, 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   function updateItem(id: string, patch: Partial<AudioItem>) {
     setItems((current) => current.map((item) => item.id === id ? { ...item, ...patch } : item));
@@ -217,13 +277,41 @@ export default function Home() {
 
   const completedItems = items.filter((item) => item.transcript);
   const completedCount = completedItems.length;
+  const healthLabel = health.state === "connected"
+    ? `Gemini connected${health.latencyMs ? ` · ${health.latencyMs} ms` : ""}`
+    : health.state === "checking"
+      ? "Checking Gemini"
+      : "Gemini unavailable";
 
   return (
     <main className="shell">
-      <section className="hero">
-        <div className="eyebrow">GEMINI STT</div>
-        <h1>Audio to text.</h1>
-        <p>Upload. Transcribe. Done.</p>
+      <header className="topbar">
+        <div className="brandArea">
+          <div className="brand">Gemini STT</div>
+          <div className={`healthStatus ${health.state}`} title="Backend and Gemini API connection">
+            <span className="statusDot" />
+            <span>{healthLabel}</span>
+          </div>
+        </div>
+
+        <div className="themeSwitch" role="group" aria-label="Color theme">
+          {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={theme === mode ? "active" : ""}
+              aria-pressed={theme === mode}
+              onClick={() => setTheme(mode)}
+            >
+              {mode[0].toUpperCase() + mode.slice(1)}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <section className="intro">
+        <h1>Audio to text</h1>
+        <p>Upload files and transcribe them.</p>
       </section>
 
       <section className="workspace">
@@ -256,9 +344,9 @@ export default function Home() {
                 addFiles(event.dataTransfer.files);
               }}
             >
-              <span className="uploadIcon">↑</span>
+              <span className="uploadIcon">+</span>
               <strong>{items.length ? `${items.length} file${items.length === 1 ? "" : "s"}` : "Add audio"}</strong>
-              <span className="dropHint">Drop files or browse</span>
+              <span className="dropHint">Drop files here or browse</span>
               <span className="formats">MP3 · WAV · M4A · OGG · FLAC · WEBM · more</span>
             </button>
 
@@ -277,7 +365,7 @@ export default function Home() {
                       {item.stage === "uploading" && <span className="pulseText">Working…</span>}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
-                      {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)}>×</button>}
+                      {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.file.name}`}>×</button>}
                     </div>
 
                     {item.stage === "converting" && (
@@ -302,8 +390,8 @@ export default function Home() {
           <section className="resultsPanel">
             <div className="batchHeader">
               <div>
-                <span className="resultLabel">RESULTS</span>
-                <h2>{completedCount ? `${completedCount} of ${items.length}` : "Transcripts"}</h2>
+                <span className="resultLabel">Results</span>
+                <h2>{completedCount ? `${completedCount} of ${items.length} complete` : "Transcripts"}</h2>
               </div>
               {completedCount > 0 && (
                 <button type="button" className="downloadAllButton" onClick={downloadAll}>Download all</button>
@@ -311,9 +399,7 @@ export default function Home() {
             </div>
 
             {!completedCount && (
-              <div className="emptyState">
-                <span>Transcripts will appear here.</span>
-              </div>
+              <div className="emptyState">Transcripts appear here.</div>
             )}
 
             <div className="resultsList">
@@ -334,7 +420,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>3 files at a time · Gemini 3.5 Transcribe</footer>
+      <footer>Gemini 3.5 Transcribe · 3 files at a time</footer>
     </main>
   );
 }
