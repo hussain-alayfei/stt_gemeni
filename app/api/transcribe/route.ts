@@ -37,6 +37,11 @@ function getMimeType(file: File) {
   return "audio/mpeg";
 }
 
+function retrySecondsFromMessage(message: string) {
+  const match = message.match(/retry in\s+([\d.]+)s/i);
+  return match ? Math.ceil(Number(match[1])) : 35;
+}
+
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -113,9 +118,20 @@ export async function POST(request: Request) {
     return Response.json({ transcript });
   } catch (error) {
     console.error("Transcription error:", error);
+    const message = error instanceof Error ? error.message : "Transcription failed.";
+    const isRateLimited = /429|quota exceeded|resource_exhausted/i.test(message);
+
     return Response.json(
-      { error: error instanceof Error ? error.message : "Transcription failed." },
-      { status: 500 },
+      {
+        error: isRateLimited ? "Gemini rate limit reached. Retrying shortly…" : message,
+        retryAfter: isRateLimited ? retrySecondsFromMessage(message) : undefined,
+      },
+      {
+        status: isRateLimited ? 429 : 500,
+        headers: isRateLimited
+          ? { "Retry-After": String(retrySecondsFromMessage(message)) }
+          : undefined,
+      },
     );
   } finally {
     if (tempPath) {
