@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return Response.json(
-      { error: "GEMINI_API_KEY is missing from the server environment." },
+      { error: "Server configuration is incomplete." },
       { status: 500 },
     );
   }
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
 
     if (file.size > MAX_BYTES) {
       return Response.json(
-        { error: "Audio payload is too large for this Vercel function. The browser should compress it first." },
+        { error: "Audio payload is too large for this request. The browser should compress it first." },
         { status: 413 },
       );
     }
@@ -98,7 +98,7 @@ export async function POST(request: Request) {
     });
 
     if (!audioFile.uri) {
-      throw new Error("Gemini did not return a URI for the uploaded audio file.");
+      throw new Error("Audio upload did not return a usable file reference.");
     }
 
     uploadedName = audioFile.name || "";
@@ -146,7 +146,7 @@ export async function POST(request: Request) {
 
     const transcript = (interaction.output_text || "").trim();
     if (!transcript) {
-      throw new Error("Gemini returned an empty transcript.");
+      throw new Error("Transcription returned an empty result.");
     }
 
     return Response.json({ transcript });
@@ -159,8 +159,8 @@ export async function POST(request: Request) {
     return Response.json(
       {
         error: rateLimited
-          ? "Gemini rate limit reached. Please try again shortly."
-          : message,
+          ? "The service is busy. Please try again shortly."
+          : "Transcription failed. Please try again.",
         retryAfter,
       },
       {
