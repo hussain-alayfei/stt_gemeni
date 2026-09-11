@@ -42,6 +42,15 @@ function retrySecondsFromMessage(message: string) {
   return match ? Math.ceil(Number(match[1])) : 35;
 }
 
+function isRateLimitError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /429|quota exceeded|resource_exhausted/i.test(message);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -94,21 +103,46 @@ export async function POST(request: Request) {
 
     uploadedName = audioFile.name || "";
 
-    const interaction = await client.interactions.create({
-      model: "gemini-3.5-transcribe",
-      input: [
-        {
-          type: "audio",
-          uri: audioFile.uri,
-          mime_type: audioFile.mimeType || mimeType,
+    let interaction;
+    try {
+      interaction = await client.interactions.create({
+        model: "gemini-3.5-transcribe",
+        input: [
+          {
+            type: "audio",
+            uri: audioFile.uri,
+            mime_type: audioFile.mimeType || mimeType,
+          },
+        ],
+        generation_config: {
+          transcription_config: {
+            mode: { type: "verbatim" },
+          },
         },
-      ],
-      generation_config: {
-        transcription_config: {
-          mode: { type: "verbatim" },
+      });
+    } catch (firstError) {
+      if (!isRateLimitError(firstError)) throw firstError;
+
+      const message = firstError instanceof Error ? firstError.message : String(firstError);
+      const retrySeconds = Math.min(retrySecondsFromMessage(message) + 1, 40);
+      await sleep(retrySeconds * 1000);
+
+      interaction = await client.interactions.create({
+        model: "gemini-3.5-transcribe",
+        input: [
+          {
+            type: "audio",
+            uri: audioFile.uri,
+            mime_type: audioFile.mimeType || mimeType,
+          },
+        ],
+        generation_config: {
+          transcription_config: {
+            mode: { type: "verbatim" },
+          },
         },
-      },
-    });
+      });
+    }
 
     const transcript = (interaction.output_text || "").trim();
     if (!transcript) {
@@ -119,17 +153,20 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Transcription error:", error);
     const message = error instanceof Error ? error.message : "Transcription failed.";
-    const isRateLimited = /429|quota exceeded|resource_exhausted/i.test(message);
+    const rateLimited = isRateLimitError(error);
+    const retryAfter = rateLimited ? retrySecondsFromMessage(message) : undefined;
 
     return Response.json(
       {
-        error: isRateLimited ? "Gemini rate limit reached. Retrying shortly…" : message,
-        retryAfter: isRateLimited ? retrySecondsFromMessage(message) : undefined,
+        error: rateLimited
+          ? "Gemini rate limit reached. Please try again shortly."
+          : message,
+        retryAfter,
       },
       {
-        status: isRateLimited ? 429 : 500,
-        headers: isRateLimited
-          ? { "Retry-After": String(retrySecondsFromMessage(message)) }
+        status: rateLimited ? 429 : 500,
+        headers: rateLimited && retryAfter
+          ? { "Retry-After": String(retryAfter) }
           : undefined,
       },
     );
