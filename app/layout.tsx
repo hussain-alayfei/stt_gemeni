@@ -12,6 +12,10 @@ const plex = IBM_Plex_Sans({
 export const metadata: Metadata = {
   title: "Speech to Text",
   description: "Fast Arabic and English speech-to-text.",
+  icons: {
+    icon: [{ url: "/favicon.svg?v=2", type: "image/svg+xml" }],
+    shortcut: ["/favicon.svg?v=2"],
+  },
 };
 
 const themeScript = `
