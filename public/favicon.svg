@@ -1,35 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="crispEdges">
-  <rect width="64" height="64" fill="#0b1020"/>
-
-  <!-- Pixel microphone -->
-  <rect x="19" y="10" width="24" height="4" fill="#18213a"/>
-  <rect x="15" y="14" width="32" height="24" fill="#18213a"/>
-  <rect x="19" y="10" width="24" height="28" fill="#8b7cff"/>
-  <rect x="23" y="14" width="12" height="4" fill="#c4bbff"/>
-
-  <rect x="15" y="18" width="8" height="4" fill="#0b1020"/>
-  <rect x="15" y="26" width="8" height="4" fill="#0b1020"/>
-  <rect x="15" y="34" width="8" height="4" fill="#0b1020"/>
-  <rect x="39" y="18" width="8" height="4" fill="#0b1020"/>
-  <rect x="39" y="26" width="8" height="4" fill="#0b1020"/>
-  <rect x="39" y="34" width="8" height="4" fill="#0b1020"/>
-
-  <rect x="11" y="24" width="4" height="16" fill="#8b7cff"/>
-  <rect x="47" y="24" width="4" height="16" fill="#8b7cff"/>
-  <rect x="15" y="40" width="36" height="4" fill="#8b7cff"/>
-  <rect x="19" y="44" width="28" height="4" fill="#18213a"/>
-  <rect x="29" y="48" width="8" height="8" fill="#8b7cff"/>
-  <rect x="21" y="56" width="24" height="4" fill="#8b7cff"/>
-
-  <!-- Pixel speech / waveform bubble -->
-  <rect x="36" y="4" width="24" height="4" fill="#18213a"/>
-  <rect x="32" y="8" width="32" height="20" fill="#18213a"/>
-  <rect x="36" y="8" width="24" height="20" fill="#f8fafc"/>
-  <rect x="40" y="28" width="8" height="4" fill="#18213a"/>
-  <rect x="40" y="24" width="8" height="8" fill="#f8fafc"/>
-
-  <rect x="40" y="16" width="3" height="6" fill="#7c3aed"/>
-  <rect x="45" y="13" width="3" height="12" fill="#7c3aed"/>
-  <rect x="50" y="10" width="3" height="18" fill="#7c3aed"/>
-  <rect x="55" y="13" width="3" height="12" fill="#7c3aed"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0f172a"/>
+  <rect x="23" y="12" width="18" height="26" rx="9" fill="#f8fafc"/>
+  <rect x="29" y="17" width="6" height="12" rx="3" fill="#0f172a"/>
+  <rect x="31" y="18" width="2" height="10" rx="1" fill="#22d3ee"/>
+  <path d="M18 27v5c0 9 6 15 14 15s14-6 14-15v-5" fill="none" stroke="#22d3ee" stroke-width="5" stroke-linecap="round"/>
+  <path d="M32 47v8M24 55h16" fill="none" stroke="#f8fafc" stroke-width="5" stroke-linecap="round"/>
 </svg>
