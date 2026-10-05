@@ -7,6 +7,10 @@ const DIRECT_EXTENSIONS = new Set([
   "m4a", "opus", "webm", "l16", "alaw", "mulaw",
 ]);
 
+const VIDEO_EXTENSIONS = new Set([
+  "mp4", "mov", "m4v", "mkv", "avi", "3gp",
+]);
+
 const MAX_SERVER_BYTES = 4 * 1024 * 1024;
 const MAX_CONCURRENT = 3;
 const THEME_KEY = "stt-theme";
@@ -64,8 +68,12 @@ function itemId(file: File) {
   return `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
 }
 
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/") || VIDEO_EXTENSIONS.has(extensionOf(file.name));
+}
+
 function needsConversion(file: File) {
-  return !DIRECT_EXTENSIONS.has(extensionOf(file.name)) || file.size > MAX_SERVER_BYTES;
+  return isVideoFile(file) || !DIRECT_EXTENSIONS.has(extensionOf(file.name)) || file.size > MAX_SERVER_BYTES;
 }
 
 function applyTheme(mode: ThemeMode) {
@@ -117,44 +125,67 @@ async function convertToMp3(file: File, onProgress: (value: number) => void) {
   ]);
 
   const ffmpeg = new FFmpeg();
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
-  });
-
-  const coreBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm"),
-  });
-
-  const ext = extensionOf(file.name);
-  const inputName = `input${ext ? `.${ext}` : ""}`;
+  let inputName = "";
   const outputName = "converted.mp3";
 
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-  await ffmpeg.exec([
-    "-i", inputName,
-    "-vn",
-    "-ac", "1",
-    "-ar", "16000",
-    "-b:a", "48k",
-    outputName,
-  ]);
-
-  const output = (await ffmpeg.readFile(outputName)) as Uint8Array;
-  const converted = new File(
-    [new Uint8Array(output)],
-    `${file.name.replace(/\.[^.]+$/, "") || "audio"}.mp3`,
-    { type: "audio/mpeg" },
-  );
-
   try {
-    await ffmpeg.deleteFile(inputName);
-    await ffmpeg.deleteFile(outputName);
-  } catch {}
+    ffmpeg.on("progress", ({ progress }) => {
+      onProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
+    });
 
-  ffmpeg.terminate();
-  return converted;
+    const coreBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm"),
+    });
+
+    const ext = extensionOf(file.name);
+    inputName = `input${ext ? `.${ext}` : ""}`;
+
+    await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+    const exitCode = await ffmpeg.exec([
+      "-i", inputName,
+      "-map", "0:a:0",
+      "-vn",
+      "-ac", "1",
+      "-ar", "16000",
+      "-b:a", "48k",
+      outputName,
+    ]);
+
+    if (exitCode !== 0) {
+      throw new Error(
+        isVideoFile(file)
+          ? "Could not extract audio from this video. Make sure the MP4 contains an audio track."
+          : "Could not convert this media file to audio.",
+      );
+    }
+
+    const output = (await ffmpeg.readFile(outputName)) as Uint8Array;
+    if (!output.length) {
+      throw new Error("The converted audio is empty.");
+    }
+
+    return new File(
+      [new Uint8Array(output)],
+      `${file.name.replace(/\.[^.]+$/, "") || "audio"}.mp3`,
+      { type: "audio/mpeg" },
+    );
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error(
+      isVideoFile(file)
+        ? "Could not extract audio from this video. Please try another MP4 file."
+        : "Could not convert this media file.",
+    );
+  } finally {
+    try {
+      if (inputName) await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
+    } catch {}
+    ffmpeg.terminate();
+  }
 }
 
 export default function Home() {
@@ -272,7 +303,7 @@ export default function Home() {
     } catch (err) {
       updateItem(id, {
         stage: "error",
-        error: err instanceof Error ? err.message : "Something went wrong.",
+        error: err instanceof Error ? err.message : "Could not process this file.",
       });
     }
   }
@@ -373,7 +404,7 @@ export default function Home() {
 
       <section className="intro">
         <h1>Audio to text</h1>
-        <p>Upload files and transcribe them.</p>
+        <p>Upload audio or video and transcribe it.</p>
       </section>
 
       <section className="workspace">
@@ -384,7 +415,7 @@ export default function Home() {
               className="hiddenInput"
               type="file"
               multiple
-              accept="audio/*,.amr,.3gp,.wma,.caf,.ape,.ac3,.mka"
+              accept="audio/*,video/mp4,video/quicktime,video/x-m4v,.mp4,.mov,.m4v,.mkv,.avi,.3gp,.amr,.wma,.caf,.ape,.ac3,.mka"
               onChange={(event) => {
                 if (event.target.files) addFiles(event.target.files);
                 event.target.value = "";
@@ -407,9 +438,9 @@ export default function Home() {
               }}
             >
               <span className="uploadIcon">+</span>
-              <strong>{items.length ? `${items.length} file${items.length === 1 ? "" : "s"}` : "Add audio"}</strong>
+              <strong>{items.length ? `${items.length} file${items.length === 1 ? "" : "s"}` : "Add media"}</strong>
               <span className="dropHint">Drop files here or browse</span>
-              <span className="formats">MP3 · WAV · M4A · OGG · FLAC · WEBM · more</span>
+              <span className="formats">MP3 · WAV · M4A · MP4 · MOV · OGG · FLAC · WEBM · more</span>
             </button>
 
             {items.length > 0 && (
@@ -423,7 +454,7 @@ export default function Home() {
 
                     <div className="queueStatus">
                       {item.stage === "idle" && <span>Ready</span>}
-                      {item.stage === "converting" && <span>{item.progress}%</span>}
+                      {item.stage === "converting" && <span>{isVideoFile(item.file) ? `Extracting audio · ${item.progress}%` : `${item.progress}%`}</span>}
                       {item.stage === "uploading" && <span>Working</span>}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
@@ -463,7 +494,7 @@ export default function Home() {
             {!completedCount && (
               <div className="emptyState">
                 {processing ? (
-                  <div className="emptyProcessing"><WaveLoader /><span>Processing audio</span></div>
+                  <div className="emptyProcessing"><WaveLoader /><span>Processing media</span></div>
                 ) : "Transcripts appear here."}
               </div>
             )}
@@ -486,7 +517,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>3 files at a time</footer>
+      <footer>3 files at a time · video audio is extracted automatically</footer>
     </main>
   );
 }
