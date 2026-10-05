@@ -269,3 +269,11 @@ footer { text-align: center; color: var(--muted); font-size: 11px; padding: 14px
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Sign-in */
+.loginShell { max-width: 420px; }
+.loginCard { padding: 16px; }
+.balanceForm .loginField { grid-template-columns: 1fr; }
+.signOutButton { border: 0; background: transparent; color: var(--muted); border-radius: 5px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+.signOutButton:hover { color: var(--text); }
+.partStatus { color: var(--muted); }

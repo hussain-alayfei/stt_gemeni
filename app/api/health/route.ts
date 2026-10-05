@@ -1,10 +1,13 @@
+import { isSignedIn, unauthorized } from "@/lib/session";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MODEL = "gemini-3.5-transcribe";
 const MODEL_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}`;
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (!(await isSignedIn(request))) return unauthorized();
   const started = Date.now();
   const apiKey = process.env.GEMINI_API_KEY;
 
