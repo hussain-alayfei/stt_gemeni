@@ -10,3 +10,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# FFmpeg core copied from node_modules at build time (scripts/copy-ffmpeg.mjs)
+public/ffmpeg/
+*.tsbuildinfo

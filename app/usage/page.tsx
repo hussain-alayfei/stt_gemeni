@@ -24,6 +24,8 @@ type BalanceSnapshot = {
   setAt: string;
 };
 
+type Pricing = { inputPerMillion: number; outputPerMillion: number; source: "default" | "environment" };
+
 function applyTheme(mode: ThemeMode) {
   const media = window.matchMedia("(prefers-color-scheme: dark)");
   const resolved = mode === "system" ? (media.matches ? "dark" : "light") : mode;
@@ -67,6 +69,25 @@ export default function UsagePage() {
   const [entries, setEntries] = useState<UsageEntry[]>([]);
   const [balance, setBalance] = useState<BalanceSnapshot | null>(null);
   const [balanceInput, setBalanceInput] = useState("");
+  const [pricing, setPricing] = useState<Pricing | null>(null);
+
+  useEffect(() => {
+    fetch("/api/config", { cache: "no-store" })
+      .then(async (response) => {
+        if (response.status === 401) {
+          window.location.assign("/login?next=/usage");
+          return;
+        }
+        const data = await response.json();
+        if (data?.pricing) setPricing(data.pricing);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  async function signOut() {
+    await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
+    window.location.assign("/login");
+  }
 
   useEffect(() => {
     const saved = localStorage.getItem(THEME_KEY);
@@ -153,6 +174,7 @@ export default function UsagePage() {
             <a className="navLink" href="/">Transcribe</a>
             <a className="navLink active" href="/usage">Usage</a>
           </nav>
+          <button type="button" className="signOutButton" onClick={signOut}>Sign out</button>
           <div className="themeSwitch" role="group" aria-label="Color theme">
             {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
               <button
@@ -246,12 +268,12 @@ export default function UsagePage() {
             </div>
           </div>
           <div className="pricingRows">
-            <div><span>Input</span><strong>$2.00 / 1M tokens</strong></div>
-            <div><span>Output</span><strong>$12.00 / 1M tokens</strong></div>
-            <div><span>Typical combined rate</span><strong>≈ $0.005 / min</strong></div>
+            <div><span>Input</span><strong>{pricing ? `${money(pricing.inputPerMillion)} / 1M tokens` : "…"}</strong></div>
+            <div><span>Output</span><strong>{pricing ? `${money(pricing.outputPerMillion)} / 1M tokens` : "…"}</strong></div>
+            <div><span>Source</span><strong>{pricing ? (pricing.source === "environment" ? "Server settings" : "Built-in defaults") : "…"}</strong></div>
           </div>
           <p className="usageNote">
-            Request cost is calculated from the token usage returned by the transcription API. The per-minute figure is only a pricing reference.
+            Request cost is calculated from the token usage returned by the transcription API at these rates. If Google changes its prices, set GEMINI_INPUT_USD_PER_MILLION and GEMINI_OUTPUT_USD_PER_MILLION on the server.
           </p>
         </article>
       </section>

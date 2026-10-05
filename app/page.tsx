@@ -1,18 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { FFMPEG_BASE, MAX_UPLOAD_BYTES, conversionArgs, extensionOf, isVideo, joinParts, needsConversion as needsConversionFor } from "@/lib/audio";
 
-const DIRECT_EXTENSIONS = new Set([
-  "wav", "mp3", "aiff", "aif", "aac", "ogg", "flac", "mpeg",
-  "m4a", "opus", "webm", "l16", "alaw", "mulaw",
-]);
-
-const VIDEO_EXTENSIONS = new Set([
-  "mp4", "mov", "m4v", "mkv", "avi", "3gp",
-]);
-
-const MAX_SERVER_BYTES = 4 * 1024 * 1024;
 const MAX_CONCURRENT = 3;
+const MAX_ATTEMPTS = 4;
+const MAX_WAIT_SECONDS = 60;
 const THEME_KEY = "stt-theme";
 const USAGE_KEY = "stt-usage-v1";
 
@@ -28,6 +21,11 @@ type AudioItem = {
   transcript: string;
   error: string;
   copied: boolean;
+  /** 1-based part being transcribed and the number of parts (long recordings are split). */
+  part: number;
+  parts: number;
+  /** Short status note, e.g. while waiting for a busy service. */
+  note: string;
 };
 
 type HealthInfo = {
@@ -54,11 +52,6 @@ type UsageEntry = {
   costUsd: number;
 };
 
-function extensionOf(name: string) {
-  const part = name.split(".").pop()?.toLowerCase();
-  return part && part !== name.toLowerCase() ? part : "";
-}
-
 function humanSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -69,12 +62,16 @@ function itemId(file: File) {
 }
 
 function isVideoFile(file: File) {
-  return file.type.startsWith("video/") || VIDEO_EXTENSIONS.has(extensionOf(file.name));
+  return isVideo(file.name, file.type);
 }
 
 function needsConversion(file: File) {
-  return isVideoFile(file) || !DIRECT_EXTENSIONS.has(extensionOf(file.name)) || file.size > MAX_SERVER_BYTES;
+  return needsConversionFor(file.name, file.size, file.type);
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+class SignedOutError extends Error {}
 
 function applyTheme(mode: ThemeMode) {
   const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -118,7 +115,8 @@ function recordUsage(fileName: string, usage?: UsagePayload) {
   }
 }
 
-async function convertToMp3(file: File, onProgress: (value: number) => void) {
+/** Converts any media to mono 16 kHz MP3 and splits it into parts small enough for one request. */
+async function convertToParts(file: File, onProgress: (value: number) => void): Promise<File[]> {
   const [{ FFmpeg }, { fetchFile, toBlobURL }] = await Promise.all([
     import("@ffmpeg/ffmpeg"),
     import("@ffmpeg/util"),
@@ -126,66 +124,91 @@ async function convertToMp3(file: File, onProgress: (value: number) => void) {
 
   const ffmpeg = new FFmpeg();
   let inputName = "";
-  const outputName = "converted.mp3";
+  let partNames: string[] = [];
 
   try {
     ffmpeg.on("progress", ({ progress }) => {
       onProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
     });
 
-    const coreBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
     await ffmpeg.load({
-      coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm"),
+      coreURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.js`, "text/javascript"),
+      wasmURL: await toBlobURL(`${FFMPEG_BASE}/ffmpeg-core.wasm`, "application/wasm"),
     });
 
     const ext = extensionOf(file.name);
     inputName = `input${ext ? `.${ext}` : ""}`;
-
     await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-    const exitCode = await ffmpeg.exec([
-      "-i", inputName,
-      "-map", "0:a:0",
-      "-vn",
-      "-ac", "1",
-      "-ar", "16000",
-      "-b:a", "48k",
-      outputName,
-    ]);
+    const exitCode = await ffmpeg.exec(conversionArgs(inputName));
+    partNames = (await ffmpeg.listDir("/"))
+      .map((entry) => entry.name)
+      .filter((name) => /^part\d{3}\.mp3$/.test(name))
+      .sort();
 
-    if (exitCode !== 0) {
+    if (exitCode !== 0 || !partNames.length) {
       throw new Error(
         isVideoFile(file)
-          ? "Could not extract audio from this video. Make sure the MP4 contains an audio track."
+          ? "Could not extract audio from this video. Make sure it contains an audio track."
           : "Could not convert this media file to audio.",
       );
     }
 
-    const output = (await ffmpeg.readFile(outputName)) as Uint8Array;
-    if (!output.length) {
-      throw new Error("The converted audio is empty.");
+    const base = file.name.replace(/\.[^.]+$/, "") || "audio";
+    const parts: File[] = [];
+    for (const [index, name] of partNames.entries()) {
+      const output = (await ffmpeg.readFile(name)) as Uint8Array;
+      if (output.length) parts.push(new File([new Uint8Array(output)], `${base}-part${index + 1}.mp3`, { type: "audio/mpeg" }));
     }
-
-    return new File(
-      [new Uint8Array(output)],
-      `${file.name.replace(/\.[^.]+$/, "") || "audio"}.mp3`,
-      { type: "audio/mpeg" },
-    );
+    if (!parts.length) throw new Error("The converted audio is empty.");
+    return parts;
   } catch (error) {
     if (error instanceof Error) throw error;
-    throw new Error(
-      isVideoFile(file)
-        ? "Could not extract audio from this video. Please try another MP4 file."
-        : "Could not convert this media file.",
-    );
+    throw new Error(isVideoFile(file) ? "Could not extract audio from this video." : "Could not convert this media file.");
   } finally {
-    try {
-      if (inputName) await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
-    } catch {}
+    for (const name of [inputName, ...partNames]) {
+      if (name) await ffmpeg.deleteFile(name).catch(() => undefined);
+    }
     ffmpeg.terminate();
   }
+}
+
+type PartResult = { transcript: string; usage?: UsagePayload };
+
+/**
+ * Sends one part to the server. A busy service (429) is retried here in the browser after the
+ * wait it asks for, so no server function stays open while waiting.
+ */
+async function transcribePart(audio: File, onWait: (seconds: number) => void): Promise<PartResult> {
+  for (let attempt = 1; ; attempt++) {
+    const form = new FormData();
+    form.append("file", audio);
+    const response = await fetch("/api/transcribe", { method: "POST", body: form });
+    if (response.status === 401) throw new SignedOutError("Your session has ended. Please sign in again.");
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return { transcript: data.transcript || "", usage: data.usage };
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt >= MAX_ATTEMPTS) throw new Error(data.error || "Transcription failed.");
+    const waitSeconds = response.status === 429
+      ? Math.min(Number(data.retryAfter) || Number(response.headers.get("Retry-After")) || 15, MAX_WAIT_SECONDS)
+      : 3 * attempt;
+    onWait(waitSeconds);
+    await sleep(waitSeconds * 1000);
+  }
+}
+
+function sumUsage(parts: (UsagePayload | undefined)[]): UsagePayload {
+  const total = { inputTokens: 0, outputTokens: 0, thoughtTokens: 0, totalTokens: 0, costUsd: 0 };
+  for (const usage of parts) {
+    if (!usage) continue;
+    total.inputTokens += Number(usage.inputTokens) || 0;
+    total.outputTokens += Number(usage.outputTokens) || 0;
+    total.thoughtTokens += Number(usage.thoughtTokens) || 0;
+    total.totalTokens += Number(usage.totalTokens) || 0;
+    total.costUsd += Number(usage.costUsd) || 0;
+  }
+  return total;
 }
 
 export default function Home() {
@@ -220,6 +243,10 @@ export default function Home() {
     async function checkHealth() {
       try {
         const response = await fetch("/api/health", { cache: "no-store" });
+        if (response.status === 401) {
+          window.location.assign("/login");
+          return;
+        }
         const data = await response.json();
         if (!active) return;
         setHealth({
@@ -255,6 +282,9 @@ export default function Home() {
       transcript: "",
       error: "",
       copied: false,
+      part: 0,
+      parts: 0,
+      note: "",
     }));
 
     setItems((current) => [...current, ...next]);
@@ -267,45 +297,49 @@ export default function Home() {
 
   async function processOne(item: AudioItem) {
     const { id, file } = item;
-    updateItem(id, { error: "", transcript: "", copied: false, progress: 0 });
+    updateItem(id, { error: "", transcript: "", copied: false, progress: 0, part: 0, parts: 0, note: "" });
 
     try {
-      let audio = file;
-
+      let parts = [file];
       if (needsConversion(file)) {
         updateItem(id, { stage: "converting", progress: 0 });
-        audio = await convertToMp3(file, (progress) => updateItem(id, { progress }));
+        parts = await convertToParts(file, (progress) => updateItem(id, { progress }));
+      }
+      if (parts.some((part) => part.size > MAX_UPLOAD_BYTES)) {
+        throw new Error("A part is still too large after compression. Please try another file.");
       }
 
-      if (audio.size > MAX_SERVER_BYTES) {
-        throw new Error("File is still too large after compression. Try a shorter recording.");
+      const results: PartResult[] = [];
+      for (const [index, part] of parts.entries()) {
+        updateItem(id, { stage: "uploading", part: index + 1, parts: parts.length, note: "" });
+        results.push(
+          await transcribePart(part, (seconds) => updateItem(id, { note: `Service busy, retrying in ${seconds}s` })),
+        );
       }
 
-      updateItem(id, { stage: "uploading" });
-
-      const form = new FormData();
-      form.append("file", audio);
-
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: form,
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Transcription failed.");
-
-      recordUsage(file.name, data.usage);
+      recordUsage(file.name, sumUsage(results.map((result) => result.usage)));
       updateItem(id, {
-        transcript: data.transcript || "",
+        transcript: joinParts(results.map((result) => result.transcript)),
         stage: "done",
         progress: 100,
+        note: "",
       });
     } catch (err) {
+      if (err instanceof SignedOutError) {
+        window.location.assign("/login");
+        return;
+      }
       updateItem(id, {
         stage: "error",
+        note: "",
         error: err instanceof Error ? err.message : "Could not process this file.",
       });
     }
+  }
+
+  async function signOut() {
+    await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
+    window.location.assign("/login");
   }
 
   async function transcribeAll() {
@@ -386,6 +420,7 @@ export default function Home() {
             <a className="navLink active" href="/">Transcribe</a>
             <a className="navLink" href="/usage">Usage</a>
           </nav>
+          <button type="button" className="signOutButton" onClick={signOut}>Sign out</button>
           <div className="themeSwitch" role="group" aria-label="Color theme">
             {(["light", "dark", "system"] as ThemeMode[]).map((mode) => (
               <button
@@ -455,7 +490,11 @@ export default function Home() {
                     <div className="queueStatus">
                       {item.stage === "idle" && <span>Ready</span>}
                       {item.stage === "converting" && <span>{isVideoFile(item.file) ? `Extracting audio · ${item.progress}%` : `${item.progress}%`}</span>}
-                      {item.stage === "uploading" && <span>Working</span>}
+                      {item.stage === "uploading" && (
+                        <span className="partStatus">
+                          {item.note || (item.parts > 1 ? `Part ${item.part} of ${item.parts}` : "Working")}
+                        </span>
+                      )}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
                       {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.file.name}`}>×</button>}
@@ -517,7 +556,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>3 files at a time · video audio is extracted automatically</footer>
+      <footer>3 files at a time · video audio is extracted automatically · long recordings are split into 9-minute parts</footer>
     </main>
   );
 }
