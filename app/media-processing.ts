@@ -40,13 +40,14 @@ async function extractAac(file: File, onProgress: (n:number)=>void): Promise<Fil
     channels = track.audio?.channel_count ?? 0;
     aot = Number(track.codec?.match(/^mp4a\.40\.(\d+)$/)?.[1] || 0);
     if (aot !== 2 || !rate || !channels) {unsupported = true; return;}
-    mp4.setExtractionOptions(track.id, null, {nbSamples: 100, rapAlignement: false});
+    mp4.setExtractionOptions(track.id, null, {nbSamples: 100});
     mp4.start();
   };
   mp4.onSamples = (id, _user, samples) => {
     for (const sample of samples) {
       if (failure) break;
       try {
+        if (!sample.data) throw new Error("Audio sample bytes are unavailable.");
         const frame = packAac(new Uint8Array(sample.data), rate, channels, aot);
         const seconds = sample.duration/sample.timescale;
         if (frames.length && (total+frame.length>LIMIT || duration+seconds>MAX_SECONDS)) flush();
