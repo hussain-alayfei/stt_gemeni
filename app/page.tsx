@@ -29,6 +29,9 @@ type AudioItem = {
   error: string;
   copied: boolean;
   segmentText?: string;
+  chunks?: File[];
+  completedParts?: string[];
+  nextPart?: number;
 };
 
 type HealthInfo = {
@@ -187,6 +190,8 @@ export default function Home() {
       error: "",
       copied: false,
       segmentText: "",
+      completedParts: [],
+      nextPart: 0,
     }));
 
     setItems((current) => [...current, ...next]);
@@ -199,41 +204,56 @@ export default function Home() {
 
   async function processOne(item: AudioItem) {
     const { id, file } = item;
-    updateItem(id, { error: "", transcript: "", copied: false, progress: 0, segmentText: "" });
+    updateItem(id, { error: "", copied: false, segmentText: "" });
     try {
-      let chunks: File[];
-      if (needsConversion(file)) {
-        updateItem(id, { stage: "converting", progress: 0, segmentText: "Preparing audio" });
-        const { prepareMedia } = await import("./media-processing");
-        chunks = await prepareMedia(file, (progress) => updateItem(id, { progress }));
-      } else {
-        chunks = [file];
+      let chunks = item.chunks;
+      if (!chunks) {
+        if (needsConversion(file)) {
+          updateItem(id, { stage: "converting", progress: 0, segmentText: "Preparing audio" });
+          const { prepareMedia } = await import("./media-processing");
+          chunks = await prepareMedia(file, (progress) => updateItem(id, { progress }));
+        } else {
+          chunks = [file];
+        }
+        if (!chunks.length) throw new Error("No audio could be extracted from this file.");
+        // Cache the extracted audio in memory so a retry never re-processes a
+        // 250 MB video or resends already-completed parts.
+        updateItem(id, { chunks, completedParts: [], nextPart: 0 });
       }
-      if (!chunks.length) throw new Error("No audio could be extracted from this file.");
-      const transcripts: string[] = [];
-      for (let index = 0; index < chunks.length; index++) {
+
+      const transcripts = [...(item.completedParts || [])];
+      const startAt = Math.min(item.nextPart || 0, chunks.length);
+      const { transcribeChunk } = await import("./transcription-client");
+      for (let index = startAt; index < chunks.length; index++) {
         const audio = chunks[index];
-        if (audio.size > MAX_SERVER_BYTES) throw new Error("The extracted audio chunk exceeds the upload limit.");
+        if (audio.size > MAX_SERVER_BYTES) throw new Error("An extracted audio part exceeds the upload limit.");
+        const label = `Part ${index + 1} / ${chunks.length}`;
         updateItem(id, {
           stage: "uploading",
-          segmentText: chunks.length > 1 ? `Part ${index + 1} / ${chunks.length}` : "Transcribing",
+          segmentText: label,
           progress: Math.round((index / chunks.length) * 100),
         });
-        const form = new FormData();
-        form.append("file", audio);
-        const response = await fetch("/api/transcribe", { method: "POST", body: form });
-        const data = await response.json().catch(() => ({ error: `Server error (${response.status})` }));
-        if (!response.ok) {
-          throw new Error(`${data.error || "Transcription failed."}${chunks.length > 1 ? ` (part ${index + 1} of ${chunks.length})` : ""}`);
-        }
-        transcripts.push(String(data.transcript || "").trim());
-        recordUsage(chunks.length > 1 ? `${file.name} / ${index + 1}` : file.name, data.usage);
+        const result = await transcribeChunk(
+          audio,
+          (status) => updateItem(id, { segmentText: `${label} · ${status}` }),
+          (usage) => recordUsage(`${file.name} / ${index + 1}`, usage),
+        );
+        transcripts[index] = result.transcript;
+        // Publish partial output immediately, then advance the checkpoint.
+        // Re-pressing Transcribe after failure resumes from that checkpoint.
+        updateItem(id, {
+          completedParts: [...transcripts],
+          nextPart: index + 1,
+          transcript: transcripts.filter(Boolean).join("\n\n"),
+          progress: Math.round(((index + 1) / chunks.length) * 100),
+        });
       }
+
       updateItem(id, {
-        transcript: transcripts.filter(Boolean).join("\n\n"),
         stage: "done",
         segmentText: "",
         progress: 100,
+        chunks: undefined,
       });
     } catch (err) {
       updateItem(id, {
@@ -299,7 +319,7 @@ export default function Home() {
   }
 
   const completedItems = items.filter((item) => item.transcript);
-  const completedCount = completedItems.length;
+  const completedCount = items.filter((item) => item.stage === "done").length;
   const healthLabel = health.state === "connected"
     ? `API connected${health.latencyMs ? ` · ${health.latencyMs} ms` : ""}`
     : health.state === "checking"
@@ -410,7 +430,7 @@ export default function Home() {
             )}
 
             <button className="primaryButton" type="button" disabled={!items.some((item) => item.stage !== "done") || processing} onClick={transcribeAll}>
-              {processing ? "Transcribing" : items.some((item) => item.stage !== "done") ? `Transcribe ${items.filter((item) => item.stage !== "done").length}` : items.length ? "All done" : "Transcribe"}
+              {processing ? "Transcribing" : items.some((item) => item.stage === "error") ? `Resume ${items.filter((item) => item.stage !== "done").length}` : items.some((item) => item.stage !== "done") ? `Transcribe ${items.filter((item) => item.stage !== "done").length}` : items.length ? "All done" : "Transcribe"}
             </button>
           </section>
         </div>
@@ -420,14 +440,14 @@ export default function Home() {
             <div className="batchHeader">
               <div>
                 <span className="resultLabel">Results</span>
-                <h2>{completedCount ? `${completedCount} of ${items.length} complete` : "Transcripts"}</h2>
+                <h2>{completedItems.length ? `${completedCount} of ${items.length} complete` : "Transcripts"}</h2>
               </div>
-              {completedCount > 0 && (
+              {completedItems.length > 0 && (
                 <button type="button" className="downloadAllButton" onClick={downloadAll}>Download all</button>
               )}
             </div>
 
-            {!completedCount && (
+            {!completedItems.length && (
               <div className="emptyState">
                 {processing ? (
                   <div className="emptyProcessing"><WaveLoader /><span>Processing media</span></div>
@@ -439,7 +459,7 @@ export default function Home() {
               {completedItems.map((item) => (
                 <section className="resultCard fadeItem" key={`result-${item.id}`}>
                   <div className="resultHeader">
-                    <h2>{item.file.name}</h2>
+                    <h2>{item.file.name}{item.stage !== "done" ? " · Partial" : ""}</h2>
                     <div className="actions">
                       <button type="button" onClick={() => copyTranscript(item)}>{item.copied ? "Copied" : "Copy"}</button>
                       <button type="button" onClick={() => downloadTranscript(item)}>Download</button>
