@@ -49,10 +49,6 @@ function isRateLimitError(error: unknown) {
   return /429|quota exceeded|resource_exhausted/i.test(message);
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -105,52 +101,23 @@ export async function POST(request: Request) {
 
     uploadedName = audioFile.name || "";
 
-    let interaction;
-    try {
-      interaction = await client.interactions.create({
-        model: "gemini-3.5-transcribe",
-        input: [
-          {
-            type: "audio",
-            uri: audioFile.uri,
-            mime_type: audioFile.mimeType || mimeType,
-          },
-        ],
-        generation_config: {
-          transcription_config: {
-            mode: { type: "verbatim" },
-          },
+    // Rate-limit and transient retries happen client-side, outside the Vercel
+    // function deadline. Holding this function open for 30-40s is unsafe.
+    const interaction = await client.interactions.create({
+      model: "gemini-3.5-transcribe",
+      input: [{
+        type: "audio",
+        uri: audioFile.uri,
+        mime_type: audioFile.mimeType || mimeType,
+      }],
+      generation_config: {
+        transcription_config: {
+          mode: { type: "verbatim" },
         },
-      });
-    } catch (firstError) {
-      if (!isRateLimitError(firstError)) throw firstError;
-
-      const message = firstError instanceof Error ? firstError.message : String(firstError);
-      const retrySeconds = Math.min(retrySecondsFromMessage(message) + 1, 40);
-      await sleep(retrySeconds * 1000);
-
-      interaction = await client.interactions.create({
-        model: "gemini-3.5-transcribe",
-        input: [
-          {
-            type: "audio",
-            uri: audioFile.uri,
-            mime_type: audioFile.mimeType || mimeType,
-          },
-        ],
-        generation_config: {
-          transcription_config: {
-            mode: { type: "verbatim" },
-          },
-        },
-      });
-    }
+      },
+    });
 
     const transcript = (interaction.output_text || "").trim();
-    if (!transcript) {
-      throw new Error("Transcription returned an empty result.");
-    }
-
     const inputTokens = interaction.usage?.total_input_tokens ?? 0;
     const outputTokens = interaction.usage?.total_output_tokens ?? 0;
     const thoughtTokens = interaction.usage?.total_thought_tokens ?? 0;
@@ -160,16 +127,30 @@ export async function POST(request: Request) {
         (outputTokens + thoughtTokens) * OUTPUT_USD_PER_MILLION_TOKENS) /
       1_000_000;
 
-    return Response.json({
-      transcript,
-      usage: {
+    const usage = {
+      inputTokens,
+      outputTokens,
+      thoughtTokens,
+      totalTokens,
+      costUsd: Number(costUsd.toFixed(8)),
+    };
+
+    if (!transcript) {
+      // A valid model response can contain no text. Preserve billing usage and
+      // tell the client that this particular segment needs a retry.
+      console.warn("No transcript text returned", {
+        status: interaction.status,
         inputTokens,
         outputTokens,
-        thoughtTokens,
-        totalTokens,
-        costUsd: Number(costUsd.toFixed(8)),
-      },
-    });
+      });
+      return Response.json({
+        error: "No speech text was returned for this segment.",
+        code: "EMPTY_TRANSCRIPT",
+        usage,
+      }, { status: 422 });
+    }
+
+    return Response.json({ transcript, usage });
   } catch (error) {
     console.error("Transcription error:", error);
     const message = error instanceof Error ? error.message : "Transcription failed.";
@@ -182,9 +163,10 @@ export async function POST(request: Request) {
           ? "The service is busy. Please try again shortly."
           : "Transcription failed. Please try again.",
         retryAfter,
+        code: rateLimited ? "RATE_LIMITED" : "UPSTREAM_ERROR",
       },
       {
-        status: rateLimited ? 429 : 500,
+        status: rateLimited ? 429 : 503,
         headers: rateLimited && retryAfter
           ? { "Retry-After": String(retryAfter) }
           : undefined,
