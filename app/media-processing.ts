@@ -1,6 +1,6 @@
 // Client-only MP4 audio extraction with memory-bounded input reads.
 const LIMIT = 2_700_000; // Leaves room for request metadata under Vercel's 4MB limit.
-const MAX_SECONDS = 360;
+const MAX_SECONDS = 120;
 const DIRECT = new Set(["wav","mp3","aiff","aif","aac","ogg","flac","mpeg","m4a","opus","webm","l16","alaw","mulaw"]);
 const MP4 = new Set(["mp4","mov","m4v","3gp"]);
 const ext = (name: string) => name.split(".").pop()?.toLowerCase() || "";
@@ -91,7 +91,7 @@ async function ffmpegFallback(file: File, onProgress: (n:number)=>void): Promise
     });
     const input="source."+ext(file.name);
     await ffmpeg.writeFile(input,await fetchFile(file));
-    const code=await ffmpeg.exec(["-nostdin","-i",input,"-map","0:a:0","-vn","-sn","-dn","-ac","1","-ar","16000","-c:a","libmp3lame","-b:a","48k","-f","segment","-segment_time","360","-reset_timestamps","1","part-%03d.mp3"]);
+    const code=await ffmpeg.exec(["-nostdin","-i",input,"-map","0:a:0","-vn","-sn","-dn","-ac","1","-ar","16000","-c:a","libmp3lame","-b:a","48k","-f","segment","-segment_time","120","-reset_timestamps","1","part-%03d.mp3"]);
     if (code!==0) throw new Error(failure || "Audio codec not supported.");
     const names=(await ffmpeg.listDir("/")).map(x=>x.name).filter(x=>/^part-\d+\.mp3$/.test(x)).sort();
     if (!names.length) throw new Error("No audio track was found.");
@@ -112,7 +112,7 @@ async function ffmpegFallback(file: File, onProgress: (n:number)=>void): Promise
   } finally {ffmpeg.terminate();}
 }
 
-// Serialize heavy preparation, but allow the network requests of other files in parallel.
+// Serialize heavy preparation, but allow network transcription on other files.
 let pending=Promise.resolve();
 async function oneAtATime<T>(task:()=>Promise<T>): Promise<T> {
   const previous=pending;
