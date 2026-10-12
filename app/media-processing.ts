@@ -137,3 +137,28 @@ export async function prepareMedia(file: File,onProgress:(n:number)=>void):Promi
     return ffmpegFallback(file,onProgress);
   });
 }
+
+
+/** Split a raw ADTS AAC part at a valid frame boundary if the model produced no text.
+ * This permits adaptive retries without re-encoding or re-reading the MP4.
+ */
+export async function splitAacPart(file: File): Promise<File[] | null> {
+  if (!/\.aac$/i.test(file.name) || file.size < 4000) return null;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const midpoint = Math.floor(bytes.length / 2);
+  let position = 0;
+  let boundary = 0;
+  while (position + 7 <= bytes.length) {
+    if (bytes[position] !== 0xff || (bytes[position + 1] & 0xf0) !== 0xf0) return null;
+    const length = ((bytes[position + 3] & 3) << 11) | (bytes[position + 4] << 3) | (bytes[position + 5] >> 5);
+    if (length < 7 || position + length > bytes.length) return null;
+    position += length;
+    if (!boundary && position >= midpoint) boundary = position;
+  }
+  if (position !== bytes.length || boundary <= 0 || boundary >= bytes.length) return null;
+  const common = file.name.replace(/\.aac$/i, "");
+  return [
+    new File([file.slice(0, boundary)], common + "-a.aac", { type: "audio/aac" }),
+    new File([file.slice(boundary)], common + "-b.aac", { type: "audio/aac" }),
+  ];
+}
