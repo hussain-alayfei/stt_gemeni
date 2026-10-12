@@ -28,6 +28,7 @@ type AudioItem = {
   transcript: string;
   error: string;
   copied: boolean;
+  segmentText?: string;
 };
 
 type HealthInfo = {
@@ -118,76 +119,6 @@ function recordUsage(fileName: string, usage?: UsagePayload) {
   }
 }
 
-async function convertToMp3(file: File, onProgress: (value: number) => void) {
-  const [{ FFmpeg }, { fetchFile, toBlobURL }] = await Promise.all([
-    import("@ffmpeg/ffmpeg"),
-    import("@ffmpeg/util"),
-  ]);
-
-  const ffmpeg = new FFmpeg();
-  let inputName = "";
-  const outputName = "converted.mp3";
-
-  try {
-    ffmpeg.on("progress", ({ progress }) => {
-      onProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
-    });
-
-    const coreBase = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm";
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${coreBase}/ffmpeg-core.js`, "text/javascript"),
-      wasmURL: await toBlobURL(`${coreBase}/ffmpeg-core.wasm`, "application/wasm"),
-    });
-
-    const ext = extensionOf(file.name);
-    inputName = `input${ext ? `.${ext}` : ""}`;
-
-    await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-    const exitCode = await ffmpeg.exec([
-      "-i", inputName,
-      "-map", "0:a:0",
-      "-vn",
-      "-ac", "1",
-      "-ar", "16000",
-      "-b:a", "48k",
-      outputName,
-    ]);
-
-    if (exitCode !== 0) {
-      throw new Error(
-        isVideoFile(file)
-          ? "Could not extract audio from this video. Make sure the MP4 contains an audio track."
-          : "Could not convert this media file to audio.",
-      );
-    }
-
-    const output = (await ffmpeg.readFile(outputName)) as Uint8Array;
-    if (!output.length) {
-      throw new Error("The converted audio is empty.");
-    }
-
-    return new File(
-      [new Uint8Array(output)],
-      `${file.name.replace(/\.[^.]+$/, "") || "audio"}.mp3`,
-      { type: "audio/mpeg" },
-    );
-  } catch (error) {
-    if (error instanceof Error) throw error;
-    throw new Error(
-      isVideoFile(file)
-        ? "Could not extract audio from this video. Please try another MP4 file."
-        : "Could not convert this media file.",
-    );
-  } finally {
-    try {
-      if (inputName) await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
-    } catch {}
-    ffmpeg.terminate();
-  }
-}
-
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<AudioItem[]>([]);
@@ -255,6 +186,7 @@ export default function Home() {
       transcript: "",
       error: "",
       copied: false,
+      segmentText: "",
     }));
 
     setItems((current) => [...current, ...next]);
@@ -267,52 +199,56 @@ export default function Home() {
 
   async function processOne(item: AudioItem) {
     const { id, file } = item;
-    updateItem(id, { error: "", transcript: "", copied: false, progress: 0 });
-
+    updateItem(id, { error: "", transcript: "", copied: false, progress: 0, segmentText: "" });
     try {
-      let audio = file;
-
+      let chunks: File[];
       if (needsConversion(file)) {
-        updateItem(id, { stage: "converting", progress: 0 });
-        audio = await convertToMp3(file, (progress) => updateItem(id, { progress }));
+        updateItem(id, { stage: "converting", progress: 0, segmentText: "Preparing audio" });
+        const { prepareMedia } = await import("./media-processing");
+        chunks = await prepareMedia(file, (progress) => updateItem(id, { progress }));
+      } else {
+        chunks = [file];
       }
-
-      if (audio.size > MAX_SERVER_BYTES) {
-        throw new Error("File is still too large after compression. Try a shorter recording.");
+      if (!chunks.length) throw new Error("No audio could be extracted from this file.");
+      const transcripts: string[] = [];
+      for (let index = 0; index < chunks.length; index++) {
+        const audio = chunks[index];
+        if (audio.size > MAX_SERVER_BYTES) throw new Error("The extracted audio chunk exceeds the upload limit.");
+        updateItem(id, {
+          stage: "uploading",
+          segmentText: chunks.length > 1 ? `Part ${index + 1} / ${chunks.length}` : "Transcribing",
+          progress: Math.round((index / chunks.length) * 100),
+        });
+        const form = new FormData();
+        form.append("file", audio);
+        const response = await fetch("/api/transcribe", { method: "POST", body: form });
+        const data = await response.json().catch(() => ({ error: `Server error (${response.status})` }));
+        if (!response.ok) {
+          throw new Error(`${data.error || "Transcription failed."}${chunks.length > 1 ? ` (part ${index + 1} of ${chunks.length})` : ""}`);
+        }
+        transcripts.push(String(data.transcript || "").trim());
+        recordUsage(chunks.length > 1 ? `${file.name} / ${index + 1}` : file.name, data.usage);
       }
-
-      updateItem(id, { stage: "uploading" });
-
-      const form = new FormData();
-      form.append("file", audio);
-
-      const response = await fetch("/api/transcribe", {
-        method: "POST",
-        body: form,
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Transcription failed.");
-
-      recordUsage(file.name, data.usage);
       updateItem(id, {
-        transcript: data.transcript || "",
+        transcript: transcripts.filter(Boolean).join("\n\n"),
         stage: "done",
+        segmentText: "",
         progress: 100,
       });
     } catch (err) {
       updateItem(id, {
         stage: "error",
+        segmentText: "",
         error: err instanceof Error ? err.message : "Could not process this file.",
       });
     }
   }
 
   async function transcribeAll() {
-    if (!items.length || processing) return;
+    if (processing) return;
+    const queue = items.filter((item) => item.stage !== "done");
+    if (!queue.length) return;
     setProcessing(true);
-
-    const queue = [...items];
     let cursor = 0;
 
     async function worker() {
@@ -455,7 +391,7 @@ export default function Home() {
                     <div className="queueStatus">
                       {item.stage === "idle" && <span>Ready</span>}
                       {item.stage === "converting" && <span>{isVideoFile(item.file) ? `Extracting audio · ${item.progress}%` : `${item.progress}%`}</span>}
-                      {item.stage === "uploading" && <span>Working</span>}
+                      {item.stage === "uploading" && <span>{item.segmentText || "Working"}</span>}
                       {item.stage === "done" && <span className="successText">Done</span>}
                       {item.stage === "error" && <span className="errorText">Failed</span>}
                       {!processing && <button type="button" className="removeButton" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.file.name}`}>×</button>}
@@ -473,8 +409,8 @@ export default function Home() {
               </div>
             )}
 
-            <button className="primaryButton" type="button" disabled={!items.length || processing} onClick={transcribeAll}>
-              {processing ? "Transcribing" : items.length ? `Transcribe ${items.length}` : "Transcribe"}
+            <button className="primaryButton" type="button" disabled={!items.some((item) => item.stage !== "done") || processing} onClick={transcribeAll}>
+              {processing ? "Transcribing" : items.some((item) => item.stage !== "done") ? `Transcribe ${items.filter((item) => item.stage !== "done").length}` : items.length ? "All done" : "Transcribe"}
             </button>
           </section>
         </div>
@@ -517,7 +453,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer>3 files at a time · video audio is extracted automatically</footer>
+      <footer>MP4 audio extracted without re-encoding when supported · Large recordings split automatically</footer>
     </main>
   );
 }
