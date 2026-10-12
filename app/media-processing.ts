@@ -21,7 +21,7 @@ function packAac(data: Uint8Array, rate: number, channels: number, aot: number) 
 
 async function extractAac(file: File, onProgress: (n:number)=>void): Promise<File[]> {
   const { createFile } = await import("mp4box");
-  const mp4 = createFile(false);
+  const mp4 = createFile(true); // Retain compressed mdat until a trailing moov atom is parsed.
   const output: File[] = [];
   let frames: Uint8Array[] = [];
   let total = 0, duration = 0, rate = 0, channels = 0, aot = 0, count = 0;
