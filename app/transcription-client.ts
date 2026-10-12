@@ -20,13 +20,13 @@ type Payload = {
 };
 
 export class TranscriptionError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    readonly code: string,
-  ) {
+  readonly status: number;
+  readonly code: string;
+  constructor(message: string, status: number, code: string) {
     super(message);
     this.name = "TranscriptionError";
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -77,7 +77,7 @@ export async function transcribeChunk(
       await sleep(1200);
       continue;
     }
-    const retryable = response.status === 429 || response.status === 503 || response.status === 502 || response.status === 504;
+    const retryable = response.status === 429 || response.status >= 500;
     if (retryable && temporaryAttempts < 2) {
       temporaryAttempts++;
       const header = Number(response.headers.get("retry-after") || "0");
