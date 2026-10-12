@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { prepareMedia } from "../app/media-processing.ts";
+import { prepareMedia, splitAacPart } from "../app/media-processing.ts";
 
 const temp = mkdtempSync(path.join(tmpdir(), "stt-mp4-test-"));
 const ff = (args) => execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...args], { stdio: "pipe" });
@@ -53,6 +53,15 @@ const test = async (name, duration, video) => {
     const out = path.join(temp,`audio-${name}-${i}.aac`);
     writeFileSync(out, new Uint8Array(await chunks[i].arrayBuffer()));
     ff(["-f","aac","-i",out,"-f","null","-"]);
+    if (i === 0) {
+      const halves = await splitAacPart(chunks[i]);
+      assert(halves?.length === 2, "Should be able to halve a valid AAC segment");
+      for (let n = 0; n < halves.length; n++) {
+        const partPath = path.join(temp, `split-${name}-${n}.aac`);
+        writeFileSync(partPath, new Uint8Array(await halves[n].arrayBuffer()));
+        ff(["-f","aac","-i",partPath,"-f","null","-"]);
+      }
+    }
   }
   console.log(`PASS ${name}: ${input.size} video bytes -> ${chunks.length} valid AAC chunk(s)`);
 };
