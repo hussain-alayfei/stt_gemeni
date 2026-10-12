@@ -18,6 +18,30 @@ const test = async (name, duration, video) => {
     : ["-f","lavfi","-i",`sine=frequency=440:sample_rate=16000:duration=${duration}`,
        "-c:a","aac","-b:a","32k",mp4];
   ff(args);
+  // Emulate a 260 MiB MP4 with a trailing moov atom without expensive video
+  // encoding: add a standards-compliant 'free' box before the final moov.
+  if (name === "long-recording") {
+    const original = readFileSync(mp4);
+    let position = 0, moov = -1;
+    while (position + 8 <= original.length) {
+      const size = original.readUInt32BE(position);
+      const kind = original.toString("ascii", position + 4, position + 8);
+      if (kind === "moov") { moov = position; break; }
+      if (size < 8) break;
+      position += size;
+    }
+    assert(moov > 0, "Expected a trailing MP4 metadata atom.");
+    const size = 260 * 1024 * 1024;
+    const header = Buffer.alloc(8);
+    header.writeUInt32BE(size, 0);
+    header.write("free", 4);
+    writeFileSync(mp4, Buffer.concat([
+      original.subarray(0, moov),
+      header,
+      Buffer.alloc(size - 8),
+      original.subarray(moov),
+    ]));
+  }
   const input = new File([new Uint8Array(readFileSync(mp4))], name+".mp4", {type:"video/mp4"});
   let percent=0;
   const chunks = await prepareMedia(input, n=>{percent=n;});
