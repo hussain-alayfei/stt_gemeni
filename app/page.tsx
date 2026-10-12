@@ -32,6 +32,7 @@ type AudioItem = {
   chunks?: File[];
   completedParts?: string[];
   nextPart?: number;
+  splitsUsed?: number;
 };
 
 type HealthInfo = {
@@ -192,6 +193,7 @@ export default function Home() {
       segmentText: "",
       completedParts: [],
       nextPart: 0,
+      splitsUsed: 0,
     }));
 
     setItems((current) => [...current, ...next]);
@@ -223,7 +225,8 @@ export default function Home() {
 
       const transcripts = [...(item.completedParts || [])];
       const startAt = Math.min(item.nextPart || 0, chunks.length);
-      const { transcribeChunk } = await import("./transcription-client");
+      const { transcribeChunk, TranscriptionError } = await import("./transcription-client");
+      let splitsUsed = item.splitsUsed || 0;
       for (let index = startAt; index < chunks.length; index++) {
         const audio = chunks[index];
         if (audio.size > MAX_SERVER_BYTES) throw new Error("An extracted audio part exceeds the upload limit.");
@@ -233,11 +236,32 @@ export default function Home() {
           segmentText: label,
           progress: Math.round((index / chunks.length) * 100),
         });
-        const result = await transcribeChunk(
-          audio,
-          (status) => updateItem(id, { segmentText: `${label} · ${status}` }),
-          (usage) => recordUsage(`${file.name} / ${index + 1}`, usage),
-        );
+        let result;
+        try {
+          result = await transcribeChunk(
+            audio,
+            (status) => updateItem(id, { segmentText: `${label} · ${status}` }),
+            (usage) => recordUsage(`${file.name} / ${index + 1}`, usage),
+          );
+        } catch (error) {
+          // A model can return an empty transcript for a longer section.
+          // Split that specific AAC section at a frame boundary; preserve
+          // every earlier successful section and avoid re-processing video.
+          if (error instanceof TranscriptionError &&
+              error.code === "EMPTY_TRANSCRIPT" &&
+              splitsUsed < 2) {
+            const { splitAacPart } = await import("./media-processing");
+            const halves = await splitAacPart(audio);
+            if (halves) {
+              chunks = [...chunks.slice(0, index), ...halves, ...chunks.slice(index + 1)];
+              splitsUsed++;
+              updateItem(id, { chunks, splitsUsed, segmentText: `Splitting part ${index + 1}` });
+              index--;
+              continue;
+            }
+          }
+          throw error;
+        }
         transcripts[index] = result.transcript;
         // Publish partial output immediately, then advance the checkpoint.
         // Re-pressing Transcribe after failure resumes from that checkpoint.
