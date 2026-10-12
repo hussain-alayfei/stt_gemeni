@@ -14,4 +14,5 @@ jobs:
         with:
           node-version: 24
       - run: npm install
+      - run: node --experimental-strip-types scripts/test-mp4.mjs
       - run: npm run build
